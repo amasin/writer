@@ -29,10 +29,10 @@ def demo_complete_workflow():
     
     # Show publish info
     if result.get('post_url'):
-        print(f"\n✓ Published at: {result['post_url']}")
+        print(f"\n[SUCCESS] Published at: {result['post_url']}")
     else:
         err = result.get('post_url') or 'unknown error'
-        print(f"\n✗ Publishing failed or score insufficient ({result['seo_score']:.1f}) - {err}")
+        print(f"\n[FAILED] Publishing failed or score insufficient ({result['seo_score']:.1f}) - {err}")
     
     # Print results
     print("\n" + "=" * 80)
@@ -44,10 +44,10 @@ def demo_complete_workflow():
     print(f"Status: {result['status'].upper()}")
     
     if result.get('word_file'):
-        print(f"\n✓ Word Document Created: {result['word_file']}")
+        print(f"\n[OK] Word Document Created: {result['word_file']}")
         print(f"  Ready for publication on any platform!")
     else:
-        print(f"\n✗ Word Export: SEO score {result['seo_score']:.1f} < 8.0")
+        print(f"\n[INFO] Word Export: SEO score {result['seo_score']:.1f} < 8.0")
         print(f"  Document was not exported (requires score >= 8.0)")
     
     print("\n" + "=" * 80)

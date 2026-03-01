@@ -42,9 +42,10 @@ class ProofreaderAgent(A2AAgent):
         title = message.payload.get("title", "")
         topic = message.payload.get("topic", "")
         iteration = message.payload.get("iteration", 1)
+        gsc_data = message.payload.get("gsc_data")
         
         # Analyze the article
-        seo_score, suggestions = self.analyze_article(article_content, title, topic)
+        seo_score, suggestions = self.analyze_article(article_content, title, topic, gsc_data)
         
         # Track score history
         if title not in self.score_history:
@@ -71,7 +72,7 @@ class ProofreaderAgent(A2AAgent):
         """Set the A2A message broker for agent communication."""
         self.message_broker = broker
     
-    def analyze_article(self, content: str, title: str = "", topic: str = "") -> Tuple[float, List[str]]:
+    def analyze_article(self, content: str, title: str = "", topic: str = "", gsc_data: Dict[str, Any] = None) -> Tuple[float, List[str]]:
         """
         Analyze article and calculate SEO score.
         
@@ -79,6 +80,7 @@ class ProofreaderAgent(A2AAgent):
             content: Article content in HTML/WordPress format
             title: Article title
             topic: Main topic
+            gsc_data: Optional GSC insights to tailor suggestions
             
         Returns:
             Tuple of (seo_score, suggestions_list)
@@ -124,6 +126,11 @@ class ProofreaderAgent(A2AAgent):
         score += link_score
         suggestions.extend(link_suggestions)
         
+        # incorporate GSC insights
+        if gsc_data:
+            site_perf = gsc_data.get("site_performance", {})
+            if site_perf.get("ctr", 1) < 0.02:
+                suggestions.append("GSC data indicates low CTR site-wide; review title/intro and meta description.")
         # Ensure score is within 0-10 range
         final_score = min(score, 10.0)
         
@@ -374,7 +381,8 @@ class ProofreaderAgent(A2AAgent):
         }
     
     def review_and_improve(self, article_content: str, title: str, topic: str,
-                          message_broker: A2AMessageBroker, max_iterations: int = 3) -> Tuple[str, float]:
+                          message_broker: A2AMessageBroker, max_iterations: int = 3,
+                          gsc_data: Dict[str, Any] = None) -> Tuple[str, float]:
         """
         Iteratively review and improve article until SEO score >= 8.
         
@@ -423,7 +431,8 @@ class ProofreaderAgent(A2AAgent):
                         "seo_score": seo_score,
                         "suggestions": suggestions,
                         "iteration": iteration,
-                        "request_type": "improve_seo"
+                        "request_type": "improve_seo",
+                        "gsc_data": gsc_data
                     }
                 )
                 

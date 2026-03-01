@@ -21,6 +21,7 @@ from seo_title_agent import SEOTitleAgent
 from wordpress_agent import WordPressArticleAgent
 from proofreader_agent import ProofreaderAgent
 from wordpress_publisher_agent import WordPressPublisherAgent
+from gsc_performance_agent import GSCPerformanceAgent
 
 
 class WriterAgentOrchestrator:
@@ -33,17 +34,20 @@ class WriterAgentOrchestrator:
         self.wordpress_agent = WordPressArticleAgent(agent_id="wordpress_writer_agent")
         self.proofreader_agent = ProofreaderAgent(agent_id="proofreader_agent")
         self.publisher_agent = WordPressPublisherAgent(agent_id="wordpress_publisher_agent")
+        self.gsc_agent = GSCPerformanceAgent(agent_id="gsc_performance_agent")
         
         # Register agents with broker
         self.broker.register_agent(self.seo_agent)
         self.broker.register_agent(self.wordpress_agent)
         self.broker.register_agent(self.proofreader_agent)
         self.broker.register_agent(self.publisher_agent)
+        self.broker.register_agent(self.gsc_agent)
         
         # Set broker for agents
         self.seo_agent.set_message_broker(self.broker)
         self.proofreader_agent.set_message_broker(self.broker)
         self.publisher_agent.set_message_broker(self.broker)
+        self.gsc_agent.set_message_broker(self.broker)
     
     def orchestrate(self, topic: str, output_title_only: bool = True) -> dict:
         """
@@ -58,10 +62,27 @@ class WriterAgentOrchestrator:
         """
         print(f"[Orchestrator] Starting comprehensive workflow for topic: {topic}", file=sys.stderr)
         
-        # Step 1: Generate SEO-optimized title
-        print("[Orchestrator] Step 1: Generating SEO-optimized title...", file=sys.stderr)
+        # Step 1: Retrieve GSC performance insights
+        print("[Orchestrator] Step 1: Fetching GSC performance data...", file=sys.stderr)
+        gsc_data = {}
+        try:
+            msg = A2AMessage(
+                sender="orchestrator",
+                receiver="gsc_performance_agent",
+                message_type=MessageType.REQUEST,
+                payload={"request_type": "analyze_site"}
+            )
+            resp = self.broker.send_message(msg)
+            if resp and resp.message_type == MessageType.RESPONSE:
+                gsc_data = resp.payload.get("gsc_data", {})
+                print(f"[Orchestrator] GSC data: {gsc_data}", file=sys.stderr)
+        except Exception as e:
+            print(f"[Orchestrator] Failed to get GSC data: {e}", file=sys.stderr)
+
+        # Step 2: Generate SEO-optimized title using GSC insights
+        print("[Orchestrator] Step 2: Generating SEO-optimized title...", file=sys.stderr)
         seo_agent = self.seo_agent
-        best_title = seo_agent.research_and_generate(topic)
+        best_title = seo_agent.generate_title(topic, gsc_data)
         
         # Output title to stdout (primary output)
         if output_title_only:
@@ -79,7 +100,8 @@ class WriterAgentOrchestrator:
                 "title": best_title,
                 "topic": topic,
                 "request_type": "generate_article",
-                "seo_optimized": True
+                "seo_optimized": True,
+                "gsc_data": gsc_data
             }
         )
         
@@ -112,7 +134,8 @@ class WriterAgentOrchestrator:
             title=best_title,
             topic=topic,
             message_broker=self.broker,
-            max_iterations=3
+            max_iterations=3,
+            gsc_data=gsc_data
         )
         
         # Step 4: Publish article if SEO score >= 8

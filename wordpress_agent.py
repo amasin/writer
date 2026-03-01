@@ -39,6 +39,7 @@ class WordPressArticleAgent(A2AAgent):
         request_type = message.payload.get("request_type", "generate_article")
         title = message.payload.get("title", "")
         topic = message.payload.get("topic", "")
+        gsc_data = message.payload.get("gsc_data")
         
         if not title:
             return A2AMessage(
@@ -56,7 +57,7 @@ class WordPressArticleAgent(A2AAgent):
             iteration = message.payload.get("iteration", 1)
             
             improved_content = self.improve_article_seo(
-                current_content, title, topic, suggestions, iteration
+                current_content, title, topic, suggestions, iteration, gsc_data
             )
             
             self.articles[title] = improved_content
@@ -75,7 +76,7 @@ class WordPressArticleAgent(A2AAgent):
         else:
             # Original generate_article request
             # Generate the article
-            article_content = self.generate_article(title, topic)
+            article_content = self.generate_article(title, topic, gsc_data)
             
             # Cache the article
             self.articles[title] = article_content
@@ -93,22 +94,29 @@ class WordPressArticleAgent(A2AAgent):
                 }
             )
     
-    def generate_article(self, title: str, topic: str = "Artificial Intelligence") -> str:
+    def generate_article(self, title: str, topic: str = "Artificial Intelligence",
+                         gsc_data: Dict[str, Any] = None) -> str:
         """
         Generate SEO-optimized WordPress article content.
         
         Args:
             title: Article title
             topic: Main topic
+            gsc_data: Optional insights from GSC to guide content
             
         Returns:
             WordPress-formatted article content
         """
         article = self._generate_wordpress_content(title, topic)
+        if gsc_data:
+            site_perf = gsc_data.get("site_performance", {})
+            if site_perf.get("ctr", 1) < 0.02:
+                article += "\n<!-- wp:paragraph --><p>Note: previous content had low click-through rate; consider improving meta description.</p><!-- /wp:paragraph -->"
         return article
     
     def improve_article_seo(self, current_content: str, title: str, topic: str,
-                            suggestions: list, iteration: int) -> str:
+                            suggestions: list, iteration: int,
+                            gsc_data: Dict[str, Any] = None) -> str:
         """
         Improve article based on SEO suggestions.
         
@@ -118,10 +126,25 @@ class WordPressArticleAgent(A2AAgent):
             topic: Main topic
             suggestions: List of SEO improvement suggestions
             iteration: Current iteration number
+            gsc_data: Optional GSC insights to inform changes
             
         Returns:
             Improved article content
         """
+        # Start with current content and enhance it
+        improved_content = current_content
+
+        # if gsc_data suggests low_ctr, optionally adjust intro
+        if gsc_data:
+            site_perf = gsc_data.get("site_performance", {})
+            if site_perf.get("ctr", 1) < 0.02:
+                improved_content += "\n<!-- wp:paragraph --><p><em>CTA: improve click-through by revising headline or meta description.</em></p><!-- /wp:paragraph -->"
+        
+        # Apply specific improvements based on suggestions
+        for suggestion in suggestions[:3]:  # Apply top 3 suggestions
+            improved_content = self._apply_suggestion(improved_content, suggestion, title, topic)
+        
+        return improved_content
         # Start with current content and enhance it
         improved_content = current_content
         

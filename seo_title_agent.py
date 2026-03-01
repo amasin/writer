@@ -264,13 +264,14 @@ class SEOTitleAgent(A2AAgent):
         best = scored_titles[0]
         return best.get("title", "")
     
-    def research_and_generate(self, topic: str) -> str:
+    def research_and_generate(self, topic: str, gsc_data: Dict[str, Any] = None) -> str:
         """
         Main method: Research topic and generate SEO-optimized title.
         
         Args:
             topic: The topic to research
-            
+            gsc_data: Optional dictionary of performance insights from GSC
+        
         Returns:
             The best SEO-optimized article title
         """
@@ -282,10 +283,23 @@ class SEOTitleAgent(A2AAgent):
         print("Analyzing SEO metrics...", file=__import__('sys').stderr)
         scored_titles = self.analyze_seo_value(search_results)
         
+        # incorporate gsc signals
+        if gsc_data:
+            site_perf = gsc_data.get("site_performance", {})
+            ctr = site_perf.get("ctr")
+            if ctr is not None and ctr < 0.02:
+                for item in scored_titles:
+                    if len(item.get("title", "")) < 40:
+                        item["score"] -= 1
+        
         # Select best title
         best_title = self.select_best_title(scored_titles)
         
         return best_title
+
+    def generate_title(self, topic: str, gsc_data: Dict[str, Any] = None) -> str:
+        """Convenience method called by orchestrator to create title."""
+        return self.research_and_generate(topic, gsc_data)
 
 
 def main():
@@ -307,7 +321,7 @@ def main():
     
     topic = "Artificial Intelligence"
     
-    # Generate SEO-optimized title
+    # Generate SEO-optimized title (no GSC context when run standalone)
     best_title = seo_agent.research_and_generate(topic)
     
     # Output only the title (as per user requirement)
