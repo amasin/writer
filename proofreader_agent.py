@@ -43,9 +43,14 @@ class ProofreaderAgent(A2AAgent):
         topic = message.payload.get("topic", "")
         iteration = message.payload.get("iteration", 1)
         gsc_data = message.payload.get("gsc_data")
+        wp_index_pages = message.payload.get("wp_index_pages")
+        outline = message.payload.get("outline")
         
         # Analyze the article
-        seo_score, suggestions = self.analyze_article(article_content, title, topic, gsc_data)
+        seo_score, suggestions = self.analyze_article(
+            article_content, title, topic, gsc_data,
+            wp_index_pages=wp_index_pages, outline=outline
+        )
         
         # Track score history
         if title not in self.score_history:
@@ -72,7 +77,8 @@ class ProofreaderAgent(A2AAgent):
         """Set the A2A message broker for agent communication."""
         self.message_broker = broker
     
-    def analyze_article(self, content: str, title: str = "", topic: str = "", gsc_data: Dict[str, Any] = None) -> Tuple[float, List[str]]:
+    def analyze_article(self, content: str, title: str = "", topic: str = "", gsc_data: Dict[str, Any] = None,
+                        wp_index_pages: Optional[list] = None, outline: Optional[list] = None) -> Tuple[float, List[str]]:
         """
         Analyze article and calculate SEO score.
         
@@ -81,6 +87,8 @@ class ProofreaderAgent(A2AAgent):
             title: Article title
             topic: Main topic
             gsc_data: Optional GSC insights to tailor suggestions
+            wp_index_pages: Optional list of existing WP posts for duplicate checking
+            outline: Optional outline headings for similarity analysis
             
         Returns:
             Tuple of (seo_score, suggestions_list)
@@ -131,6 +139,37 @@ class ProofreaderAgent(A2AAgent):
             site_perf = gsc_data.get("site_performance", {})
             if site_perf.get("ctr", 1) < 0.02:
                 suggestions.append("GSC data indicates low CTR site-wide; review title/intro and meta description.")
+
+        # check against WordPress index for duplicates
+        if wp_index_pages:
+            try:
+                from wp_content_index import WPContentIndex
+                idx = WPContentIndex()
+                idx.build_index(wp_index_pages)
+
+                # title similarity
+                if title:
+                    dup = idx.find_duplicate_title(title)
+                    if dup.get("is_duplicate"):
+                        matches = dup.get("matches", [])
+                        if matches:
+                            suggestions.append(
+                                f"Title is very similar to existing post '{matches[0]['title']}' (score {matches[0]['similarity']:.2f}). Consider a unique angle."
+                            )
+
+                # outline similarity
+                if outline:
+                    dup_o = idx.find_duplicate_outline(outline)
+                    if dup_o.get("is_duplicate"):
+                        matches = dup_o.get("matches", [])
+                        if matches:
+                            suggestions.append(
+                                f"Outline matches existing post '{matches[0]['title']}' ({dup_o.get('matched_headings',0)} headings similar). Diversify sections."
+                            )
+            except Exception:
+                # if WPContentIndex isn't available or fails, ignore
+                pass
+
         # Ensure score is within 0-10 range
         final_score = min(score, 10.0)
         
@@ -382,7 +421,9 @@ class ProofreaderAgent(A2AAgent):
     
     def review_and_improve(self, article_content: str, title: str, topic: str,
                           message_broker: A2AMessageBroker, max_iterations: int = 3,
-                          gsc_data: Dict[str, Any] = None) -> Tuple[str, float]:
+                          gsc_data: Dict[str, Any] = None,
+                          wp_index_pages: Optional[list] = None,
+                          outline: Optional[list] = None) -> Tuple[str, float]:
         """
         Iteratively review and improve article until SEO score >= 8.
         
@@ -405,8 +446,10 @@ class ProofreaderAgent(A2AAgent):
             print(f"[Proofreader] Iteration {iteration}: Analyzing article...", file=__import__('sys').stderr)
             
             # Analyze current version
-            seo_score, suggestions = self.analyze_article(current_content, title, topic)
-            
+            seo_score, suggestions = self.analyze_article(
+                current_content, title, topic, gsc_data,
+                wp_index_pages=wp_index_pages, outline=outline
+            )            
             print(f"[Proofreader] SEO Score: {seo_score:.1f}/10", file=__import__('sys').stderr)
             print(f"[Proofreader] Top suggestions: {suggestions[:2] if suggestions else 'None'}", file=__import__('sys').stderr)
             

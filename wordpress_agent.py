@@ -40,6 +40,7 @@ class WordPressArticleAgent(A2AAgent):
         title = message.payload.get("title", "")
         topic = message.payload.get("topic", "")
         gsc_data = message.payload.get("gsc_data")
+        wp_index = message.payload.get("wp_index", [])
         
         if not title:
             return A2AMessage(
@@ -75,8 +76,12 @@ class WordPressArticleAgent(A2AAgent):
             )
         else:
             # Original generate_article request
-            # Generate the article
-            article_content = self.generate_article(title, topic, gsc_data)
+            # Generate outline with variation seed
+            style_seed = message.payload.get("style_seed", 0)
+            outline = self.generate_outline(topic, title, style_seed=style_seed)
+            
+            # Generate the article from outline
+            article_content = self.write_article_from_outline(outline, topic, title, gsc_data)
             
             # Cache the article
             self.articles[title] = article_content
@@ -88,6 +93,7 @@ class WordPressArticleAgent(A2AAgent):
                 payload={
                     "title": title,
                     "content": article_content,
+                    "outline": outline,
                     "seo_optimized": True,
                     "word_count": len(article_content.split()),
                     "format": "wordpress"
@@ -97,7 +103,10 @@ class WordPressArticleAgent(A2AAgent):
     def generate_article(self, title: str, topic: str = "Artificial Intelligence",
                          gsc_data: Dict[str, Any] = None) -> str:
         """
-        Generate SEO-optimized WordPress article content.
+        Generate SEO-optimized WordPress article content using the outline-based system.
+        
+        This wrapper ensures external callers can still use generate_article even though the
+        process_message logic now utilises the outline functions directly.
         
         Args:
             title: Article title
@@ -107,12 +116,277 @@ class WordPressArticleAgent(A2AAgent):
         Returns:
             WordPress-formatted article content
         """
-        article = self._generate_wordpress_content(title, topic)
+        # default style seed 0
+        outline = self.generate_outline(topic, title, style_seed=0)
+        article = self.write_article_from_outline(outline, topic, title, gsc_data)
+        return article
+    
+    def generate_outline(self, topic: str, title: str, style_seed: int = 0) -> list:
+        """
+        Generate article outline with varied structure based on style seed.
+        Enables different outline variations for duplicate avoidance.
+        
+        Args:
+            topic: Main article topic
+            title: Article title
+            style_seed: Variation seed (0-7) for different outline styles
+            
+        Returns:
+            List of heading strings in hierarchical order
+        """
+        # Define multiple outline styles to vary article structure
+        styles = [
+            # Style 0: Traditional flow (What > Why > How > Examples > Future > FAQ)
+            [
+                f"What is {topic}?",
+                f"Why {topic} Matters Today",
+                f"Key Applications and Use Cases",
+                f"Industry-Wide Impact of {topic}",
+                f"Challenges and Opportunities",
+                f"The Future of {topic}",
+                "Frequently Asked Questions"
+            ],
+            # Style 1: Problem-Solution flow (Problem > Solutions > Implementation > Results > FAQ)
+            [
+                f"The {topic} Challenge",
+                f"Understanding {topic} Solutions",
+                f"Core Components and Features",
+                f"Practical Implementation Strategies",
+                f"Real-World Results and Case Studies",
+                f"Best Practices for {topic}",
+                "Frequently Asked Questions"
+            ],
+            # Style 2: Comprehensive guide (Basics > Advanced > Tools > Trends > Tips > FAQ)
+            [
+                f"{topic} Fundamentals",
+                f"Getting Started with {topic}",
+                f"Advanced {topic} Concepts",
+                f"Popular Tools and Technologies",
+                f"Current Trends in {topic}",
+                f"Expert Tips and Best Practices",
+                "Frequently Asked Questions"
+            ],
+            # Style 3: Industry-focused (Overview > Sectors > Benefits > Implementation > Future > FAQ)
+            [
+                f"Overview of {topic}",
+                f"{topic} Across Different Industries",
+                f"Key Benefits and Advantages",
+                f"Implementation Considerations",
+                f"ROI and Business Impact",
+                f"Future Outlook for {topic}",
+                "Frequently Asked Questions"
+            ],
+            # Style 4: Comparison-heavy (Definition > Comparisons > Evaluation > Recommendations > FAQ)
+            [
+                f"What Exactly is {topic}?",
+                f"{topic} vs. Related Technologies",
+                f"Evaluating {topic} Solutions",
+                f"Comparing Popular {topic} Platforms",
+                f"How to Choose the Right {topic} Solution",
+                f"Recommendations and Conclusion",
+                "Frequently Asked Questions"
+            ],
+            # Style 5: Timeline-based (History > Evolution > Current State > Future > Conclusion > FAQ)
+            [
+                f"The Evolution of {topic}",
+                f"Historical Development and Milestones",
+                f"Modern Applications of {topic}",
+                f"The Current {topic} Landscape",
+                f"Emerging Trends and Innovations",
+                f"The Future of {topic}",
+                "Frequently Asked Questions"
+            ],
+            # Style 6: Detailed guide (Introduction > Deep Dive > Variations > Strategies > Metrics > FAQ)
+            [
+                f"Introduction to {topic}",
+                f"Deep Dive: Understanding {topic} Core",
+                f"Types and Variations of {topic}",
+                f"Strategic Approaches to {topic}",
+                f"Measuring {topic} Success",
+                f"Optimization and Best Practices",
+                "Frequently Asked Questions"
+            ],
+            # Style 7: Practical focus (Concepts > Tools > Workflows > Pitfalls > Mastery > FAQ)
+            [
+                f"{topic} Concepts Explained",
+                f"Tools and Platforms for {topic}",
+                f"Common Workflows and Processes",
+                f"Avoiding Common {topic} Pitfalls",
+                f"Advanced Techniques and Mastery",
+                f"Integration and Scaling {topic}",
+                "Frequently Asked Questions"
+            ]
+        ]
+        
+        # Select outline based on style seed
+        selected_outline = styles[style_seed % len(styles)]
+        return selected_outline
+    
+    def write_article_from_outline(self, outline: list, topic: str, title: str,
+                                   gsc_data: Dict[str, Any] = None) -> str:
+        """
+        Write article content structured according to provided outline.
+        
+        Args:
+            outline: List of heading strings defining article structure
+            topic: Main topic
+            title: Article title
+            gsc_data: Optional GSC insights
+            
+        Returns:
+            Complete WordPress-formatted article
+        """
+        content = []
+        
+        # Opening paragraph
+        content.append(f"""<!-- wp:paragraph -->
+<p><strong>{title}</strong> is becoming increasingly important in today's digital landscape. As organizations worldwide embrace innovation, understanding {topic.lower()} has never been more critical. This comprehensive guide explores everything you need to know about {topic.lower()}, from foundational concepts to advanced applications.</p>
+<!-- /wp:paragraph -->""")
+        
+        # Table of contents
+        toc_items = "\n".join(f"<li>{heading}</li>" for heading in outline if heading != "Frequently Asked Questions")
+        content.append(f"""<!-- wp:heading {{"level":2}} -->
+<h2>Table of Contents</h2>
+<!-- /wp:heading -->
+
+<!-- wp:list -->
+<ul>
+{toc_items}
+<li>Frequently Asked Questions</li>
+</ul>
+<!-- /wp:list -->""")
+        
+        # Main sections based on outline
+        for heading in outline:
+            if heading == "Frequently Asked Questions":
+                # FAQ section
+                content.append(self._generate_faq(topic))
+            else:
+                # Generate content for each heading
+                section_content = self._generate_section_from_heading(heading, topic)
+                content.append(section_content)
+        
+        # Conclusion
+        content.append(f"""<!-- wp:heading {{"level":2}} -->
+<h2>Conclusion</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>{topic} is no longer a future technology—it's reshaping our present. Organizations that understand and embrace {topic.lower()} will thrive in an increasingly competitive landscape. Whether you're just beginning your {topic.lower()} journey or looking to deepen your expertise, the time to act is now. Start exploring practical solutions that align with your goals and position your organization for long-term success.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:paragraph -->
+<p><strong>Ready to harness the power of {topic.lower()}? Explore solutions that drive real business value and transform your operations today.</strong></p>
+<!-- /wp:paragraph -->""")
+        
+        article = "\n\n".join(content)
+        
         if gsc_data:
             site_perf = gsc_data.get("site_performance", {})
             if site_perf.get("ctr", 1) < 0.02:
                 article += "\n<!-- wp:paragraph --><p>Note: previous content had low click-through rate; consider improving meta description.</p><!-- /wp:paragraph -->"
+        
         return article
+    
+    def _generate_section_from_heading(self, heading: str, topic: str) -> str:
+        """
+        Generate content section for a given heading.
+        
+        Args:
+            heading: The heading text
+            topic: Article topic for context
+            
+        Returns:
+            WordPress-formatted section
+        """
+        # Map common heading patterns to paragraph content
+        content_map = {
+            "What": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>{topic} refers to a comprehensive set of principles and practices designed to solve modern challenges. Understanding the fundamental concepts is essential for effective implementation. This section breaks down core definitions and key terminology.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Why": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>The importance of {topic.lower()} cannot be overstated in today's competitive environment. Organizations that leverage {topic.lower()} effectively gain significant advantages in efficiency, decision-making, and innovation. Understanding the value proposition is critical for stakeholder buy-in.</p>
+<!-- /wp:paragraph -->""",
+            
+            "How": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Implementation of {topic.lower()} follows a structured approach. Start with clear objectives and realistic timelines. Assess current capabilities and identify skill gaps. Build in phases, starting with pilot projects before full-scale deployment. Monitor progress and adjust strategies based on results.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Key": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Several key applications demonstrate the versatility of {topic.lower()}. From optimizing operations to enhancing customer experiences, the practical benefits are substantial. Real-world implementations across industries validate the approach and provide valuable lessons for others.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Industry": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>{topic} is transforming multiple industries simultaneously. Healthcare organizations improve patient outcomes. Financial institutions enhance risk management. Manufacturing increases productivity. Retail companies personalize customer journeys. The cross-industry impact demonstrates universal applicability.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Challenge": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>{topic} implementation faces real obstacles that organizations must navigate. Technical complexity requires skilled professionals. Legacy system integration can be time-consuming. Change management often faces organizational resistance. Understanding these challenges enables better planning and risk mitigation.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Future": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Looking ahead, {topic.lower()} will continue evolving at an accelerating pace. Emerging technologies promise enhanced capabilities and broader applications. New standards and best practices will emerge. Organizations that stay informed and adapt will lead their industries. The next era of {topic.lower()} innovation is just beginning.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Best": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Success with {topic.lower()} requires adherence to proven best practices. Start with clear strategy alignment. Invest in employee training and development. Implement robust governance and oversight. Foster continuous learning and improvement. Share knowledge across teams and departments.</p>
+<!-- /wp:paragraph -->""",
+            
+            "Tool": f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Modern {topic.lower()} relies on sophisticated tools and platforms. Leading solutions offer robust feature sets, scalability, and reliability. Evaluation should consider integration capabilities, ease of use, and long-term support. Community adoption and vendor stability matter for long-term success.</p>
+<!-- /wp:paragraph -->""",
+        }
+        
+        # Find matching pattern
+        for pattern, template in content_map.items():
+            if pattern.lower() in heading.lower():
+                return template
+        
+        # Default section if no pattern matches
+        return f"""<!-- wp:heading {{"level":2}} -->
+<h2>{heading}</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>This section explores important aspects of {topic.lower()} relevant to the discussion. Understanding these concepts helps organizations make informed decisions and develop effective strategies. Practical implementation requires careful consideration of organizational context and goals.</p>
+<!-- /wp:paragraph -->"""
     
     def improve_article_seo(self, current_content: str, title: str, topic: str,
                             suggestions: list, iteration: int,
@@ -361,6 +635,30 @@ class WordPressArticleAgent(A2AAgent):
 <!-- /wp:paragraph -->"""
         
         return conclusion
+    
+    def extract_headings(self, content: str) -> list:
+        """
+        Extract all headings (H2, H3) from WordPress article content.
+        Used for duplicate outline detection.
+        
+        Args:
+            content: WordPress HTML content
+            
+        Returns:
+            List of heading text values
+        """
+        import re
+        headings = []
+        
+        # Extract H2 headings
+        h2_matches = re.findall(r'<h2[^>]*>([^<]+)</h2>', content)
+        headings.extend(h2_matches)
+        
+        # Extract H3 headings
+        h3_matches = re.findall(r'<h3[^>]*>([^<]+)</h3>', content)
+        headings.extend(h3_matches)
+        
+        return headings
     
     def export_wordpress(self, title: str, output_format: str = "json") -> Optional[str]:
         """

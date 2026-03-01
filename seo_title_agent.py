@@ -275,31 +275,95 @@ class SEOTitleAgent(A2AAgent):
         Returns:
             The best SEO-optimized article title
         """
-        # Search for related articles
-        print(f"Researching topic: {topic}...", file=__import__('sys').stderr)
-        search_results = self.search_topic(topic)
+        # Generate candidates in varied styles
+        print(f"Generating title candidates for {topic}...", file=__import__('sys').stderr)
+        candidates = self.generate_title_candidates(topic, n=20)
         
-        # Analyze SEO value
-        print("Analyzing SEO metrics...", file=__import__('sys').stderr)
-        scored_titles = self.analyze_seo_value(search_results)
+        # Score each candidate
+        scored = []
+        for title in candidates:
+            score = self._calculate_seo_score(title)
+            scored.append({"title": title, "seo_score": score})
         
-        # incorporate gsc signals
+        # Sort by score
+        scored = sorted(scored, key=lambda x: x["seo_score"], reverse=True)
+        
+        # Use GSC data if available
         if gsc_data:
             site_perf = gsc_data.get("site_performance", {})
             ctr = site_perf.get("ctr")
             if ctr is not None and ctr < 0.02:
-                for item in scored_titles:
-                    if len(item.get("title", "")) < 40:
-                        item["score"] -= 1
+                # Penalize short titles when CTR is low
+                for item in scored:
+                    if len(item.get("title", "")) < 45:
+                        item["seo_score"] -= 5
         
-        # Select best title
-        best_title = self.select_best_title(scored_titles)
+        # Select best
+        scored = sorted(scored, key=lambda x: x["seo_score"], reverse=True)
+        best_title = scored[0].get("title", "Artificial Intelligence: The Complete Guide") if scored else "Artificial Intelligence: The Complete Guide"
         
         return best_title
 
     def generate_title(self, topic: str, gsc_data: Dict[str, Any] = None) -> str:
         """Convenience method called by orchestrator to create title."""
         return self.research_and_generate(topic, gsc_data)
+
+    def generate_title_candidates(self, topic: str, n: int = 20) -> List[str]:
+        """
+        Generate varied title candidates in different styles.
+        
+        Args:
+            topic: The topic
+            n: Number of candidates to generate
+            
+        Returns:
+            List of varied title patterns
+        """
+        candidates = []
+        year = 2026
+        
+        # Listicle style
+        candidates.extend([
+            f"10 Essential {topic} Strategies for {year}",
+            f"15 {topic} Tips That Actually Work",
+            f"7 Common {topic} Mistakes to Avoid",
+            f"5 {topic} Trends Dominating {year}",
+        ])
+        
+        # Guide style
+        candidates.extend([
+            f"The Ultimate Guide to {topic}",
+            f"Complete {topic} Guide for Beginners",
+            f"{topic}: A Comprehensive Guide",
+            f"How to Master {topic} in {year}",
+        ])
+        
+        # Comparison/What is
+        candidates.extend([
+            f"{topic} Explained: Everything You Need to Know",
+            f"What is {topic}? Definition and Examples",
+            f"{topic} vs Alternatives: Complete Comparison",
+            f"{topic}: Real-World Use Cases and Benefits",
+        ])
+        
+        # Problem/Solution
+        candidates.extend([
+            f"Solving {topic} Challenges: Practical Solutions",
+            f"{topic} Problems and How to Fix Them",
+            f"Why {topic} Matters: Business Impact Guide",
+            f"The Future of {topic} in {year}",
+        ])
+        
+        # Templates/Step-by-step
+        candidates.extend([
+            f"Step-by-Step {topic} Implementation Guide",
+            f"{topic} Templates and Best Practices",
+            f"How to Get Started with {topic}",
+            f"Advanced {topic} Strategies for {year}",
+        ])
+        
+        # Return top N
+        return candidates[:n]
 
 
 def main():

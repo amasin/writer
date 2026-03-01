@@ -68,7 +68,19 @@ A complete AI-powered article generation and quality assurance system using A2A 
 
 ---
 
-### 4. A2A Protocol Framework
+### 4. WordPress Content Index & Duplicate Prevention
+**File:** `wp_content_index.py`
+- Fetches live posts from WordPress REST API using Basic Auth
+- Caches results locally (6‑hour TTL) to limit API calls
+- Builds normalized index of titles and outlines for similarity checks
+- Provides methods:
+  - `find_duplicate_title(candidate, threshold=0.85)`
+  - `find_duplicate_outline(headings, threshold=0.7)`
+- Uses token-based Jaccard similarity (optionally Levenshtein via `rapidfuzz`)
+- Outline extraction via regex on H2/H3 tags
+- Used by orchestrator and proofreader to prevent duplicates in real time
+
+### 5. A2A Protocol Framework
 **File:** `a2a_protocol.py`
 - Enables secure agent-to-agent communication
 - Message broker for routing between agents
@@ -95,8 +107,13 @@ A complete AI-powered article generation and quality assurance system using A2A 
 1. Initialize all agents
 2. Register with message broker
 3. Generate SEO-optimized title
+   * **New:** generate 20 candidate titles in varied styles
+   * **New:** filter candidates against live WordPress index, retry up to 3 times
 4. Request article generation
+   * Outline produced with style seed; filter against WordPress for duplicates
+   * Regenerate outline up to 3 times using alternate seeds
 5. Start proofreader review process
+   * Proofreader warns if title or outline closely matches existing posts
 6. Request improvements if needed
 7. Export to Word when score ≥ 8.0
 

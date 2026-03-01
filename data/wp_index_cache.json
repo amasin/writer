@@ -1,0 +1,21 @@
+{
+  "timestamp": 1772382499.5726612,
+  "posts": [
+    {
+      "title": "The Ultimate Guide to Artificial Intelligence",
+      "slug": "ultimate-guide-ai",
+      "link": "https://aitopchoices.com/ultimate-guide-ai",
+      "date": "2026-03-01",
+      "content": "<h2>What is AI</h2><h2>Benefits</h2><h2>Challenges</h2>",
+      "id": 1
+    },
+    {
+      "title": "AI Tools: Complete Overview",
+      "slug": "ai-tools-overview",
+      "link": "https://aitopchoices.com/ai-tools-overview",
+      "date": "2026-02-28",
+      "content": "<h2>AI Tools</h2><h2>Use Cases</h2>",
+      "id": 2
+    }
+  ]
+}

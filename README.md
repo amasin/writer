@@ -56,6 +56,16 @@ The system consists of multiple specialized agents communicating through the A2A
    - Manages title generation, article creation, and proofreading
    - Automates Word document export
 
+## Duplicate Prevention
+
+The system includes a **WordPress Content Index** module (`wp_content_index.py`) that queries the live site via REST API to fetch existing posts. Before finalizing titles or outlines, the orchestrator:
+
+- Generates multiple title candidates, filters against existing titles, and retries if all are similar
+- Produces variable outlines and compares them to published content, regenerating when needed
+- Proofreader warns of any duplicates and suggests unique angles
+
+This ensures new articles do not unintentionally replicate existing site content.
+
 ## Workflow
 
 ```
