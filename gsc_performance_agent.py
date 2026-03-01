@@ -23,6 +23,13 @@ import random
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+# Load .env file to ensure API credentials are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=Path(__file__).parent / '.env', override=True)
+except ImportError:
+    pass
+
 from a2a_protocol import A2AAgent, A2AMessage, MessageType, AgentType
 
 
@@ -31,6 +38,16 @@ class GSCPerformanceAgent(A2AAgent):
 
     def __init__(self, agent_id: str = "gsc_performance_agent"):
         super().__init__(agent_id, AgentType.WORDPRESS_WRITER_AGENT)
+
+                
+        # Explicitly load .env to ensure variables are available
+        try:
+            from dotenv import load_dotenv
+            env_path = Path(__file__).parent / '.env'
+            load_dotenv(dotenv_path=env_path, override=True)
+        except ImportError:
+            pass
+        
         self.cache_path = Path(__file__).parent / "data" / "gsc_cache.json"
         self._ensure_cache_dir()
         self.cache = self._load_cache()
