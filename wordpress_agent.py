@@ -5,7 +5,9 @@ Uses A2A protocol to receive titles and write SEO-optimized WordPress articles.
 """
 
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from wp_index import load_or_build
+from similarity import title_similarity, outline_similarity
 from datetime import datetime
 from a2a_protocol import A2AAgent, A2AMessage, MessageType, AgentType, A2AMessageBroker
 
@@ -39,8 +41,10 @@ class WordPressArticleAgent(A2AAgent):
         request_type = message.payload.get("request_type", "generate_article")
         title = message.payload.get("title", "")
         topic = message.payload.get("topic", "")
+        brief = message.payload.get("brief")
         gsc_data = message.payload.get("gsc_data")
-        wp_index = message.payload.get("wp_index", [])
+        # prefer passed index (for testability), otherwise build/load live index
+        wp_index = message.payload.get("wp_index") or load_or_build()
         
         if not title:
             return A2AMessage(
@@ -76,10 +80,59 @@ class WordPressArticleAgent(A2AAgent):
             )
         else:
             # Original generate_article request
-            # Generate outline with variation seed
-            style_seed = message.payload.get("style_seed", 0)
-            outline = self.generate_outline(topic, title, style_seed=style_seed)
-            
+            # Duplicate detection: check title similarity against live posts
+            try:
+                posts = wp_index.index if hasattr(wp_index, "index") else list(wp_index)
+            except Exception:
+                posts = []
+
+            for post in posts:
+                if title and title_similarity(title, post.get("title", "")) >= 0.85:
+                    return A2AMessage(
+                        sender=self.agent_id,
+                        receiver=message.sender,
+                        message_type=MessageType.RESPONSE,
+                        payload={
+                            "duplicate": True,
+                            "reason": "title_similar",
+                            "existing_post": post,
+                            "format": "wordpress"
+                        }
+                    )
+
+            # Try to find an outline variation that is sufficiently different
+            style_seed = int(message.payload.get("style_seed", 0))
+            best_seed = style_seed
+            best_score = 1.0
+            for seed in range(0, 8):
+                candidate_outline = self.generate_outline(topic, title, style_seed=seed)
+                # compute worst-case similarity vs existing headings
+                max_sim = 0.0
+                for post in posts:
+                    sim = outline_similarity(candidate_outline, post.get("headings", []))
+                    if sim > max_sim:
+                        max_sim = sim
+                if max_sim < best_score:
+                    best_score = max_sim
+                    best_seed = seed
+
+            # If even the best variation is too close to existing content, abort
+            if best_score >= 0.75 and posts:
+                return A2AMessage(
+                    sender=self.agent_id,
+                    receiver=message.sender,
+                    message_type=MessageType.RESPONSE,
+                    payload={
+                        "duplicate": True,
+                        "reason": "outline_similar",
+                        "closest_similarity": best_score,
+                        "format": "wordpress"
+                    }
+                )
+
+            # Generate outline with the selected seed
+            outline = self.generate_outline(topic, title, style_seed=best_seed)
+
             # Generate the article from outline
             article_content = self.write_article_from_outline(outline, topic, title, gsc_data)
             

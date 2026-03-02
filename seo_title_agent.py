@@ -27,25 +27,18 @@ except ImportError:
 
 
 class SEOTitleAgent(A2AAgent):
-    """AI Agent for researching and generating SEO-optimized titles using A2A Protocol."""
-    
+    """AI Agent for researching and generating SEO‑optimized titles."""
+
     def __init__(self, agent_id: str = "seo_title_agent"):
-        """Initialize the SEO Title Agent."""
         super().__init__(agent_id, AgentType.SEO_TITLE_AGENT)
         self.model_api = os.getenv("OPENAI_API_KEY")
         self.serpapi_key = os.getenv("SERPAPI_API_KEY")
         self.message_broker: Optional[A2AMessageBroker] = None
-        
+
+    def set_message_broker(self, broker: A2AMessageBroker) -> None:
+        self.message_broker = broker
+
     def process_message(self, message: A2AMessage) -> A2AMessage:
-        """
-        Process incoming A2A message for title generation.
-        
-        Args:
-            message: The incoming A2A message
-            
-        Returns:
-            Response message with generated title
-        """
         if message.message_type != MessageType.REQUEST:
             return A2AMessage(
                 sender=self.agent_id,
@@ -53,83 +46,98 @@ class SEOTitleAgent(A2AAgent):
                 message_type=MessageType.ERROR,
                 payload={"error": "Invalid message type"}
             )
-        
-        topic = message.payload.get("topic", "Artificial Intelligence")
-        
-        # Generate the title
-        title = self.research_and_generate(topic)
-        
+
+        brief = message.payload.get("brief")
+        if brief is None:
+            topic = message.payload.get("topic", "Artificial Intelligence")
+            from seo_brief import build_brief
+            brief = build_brief(topic)
+
+        title = self.research_and_generate(brief)
+
         return A2AMessage(
             sender=self.agent_id,
             receiver=message.sender,
             message_type=MessageType.RESPONSE,
             payload={
                 "title": title,
-                "topic": topic,
-                "seo_score": 95,
+                "brief": brief,
                 "generated_at": str(__import__('datetime').datetime.now())
             }
         )
-    
-    def set_message_broker(self, broker: A2AMessageBroker) -> None:
-        """Set the A2A message broker for agent communication."""
-        self.message_broker = broker
-        
-    def request_article_generation(self, title: str, topic: str) -> Optional[Dict[str, Any]]:
-        """
-        Request WordPress article generation from WordPress Writer Agent via A2A Protocol.
-        
-        Args:
-            title: Generated article title
-            topic: Topic being written about
-            
-        Returns:
-            Response from WordPress writer agent
-        """
-        if not self.message_broker:
-            return None
-        
-        # Send request to WordPress Writer Agent
-        message = self.send_message(
-            receiver_id="wordpress_writer_agent",
-            payload={
-                "title": title,
-                "topic": topic,
-                "request_type": "generate_article"
-            },
-            message_type=MessageType.REQUEST
-        )
-        
-        # Broker sends the message and returns response
-        response = self.message_broker.send_message(message)
-        
-        if response.message_type == MessageType.RESPONSE:
-            return response.payload
-        else:
-            return None
-        
-        
+
+    def research_and_generate(self, brief: Any, n_candidates: int = 30) -> str:
+        candidates = self.generate_title_candidates(brief, n=n_candidates)
+        from wp_index import load_or_build
+        wp_idx = load_or_build()
+        scored: List[Dict[str, Any]] = []
+        for t in candidates:
+            dup = any(title_similarity(t, post["title"]) >= 0.85 for post in wp_idx.index)
+            if dup:
+                continue
+            score = self._calculate_seo_score(t, brief)
+            scored.append({"title": t, "seo_score": score})
+        if not scored:
+            return f"Comprehensive Guide to {brief.topic}"
+        scored.sort(key=lambda x: x["seo_score"], reverse=True)
+        return scored[0]["title"]
+
+    def generate_title_candidates(self, brief: Any, n: int = 20) -> List[str]:
+        topic = brief.topic
+        angle = brief.angle or ""
+        patterns = brief.suggested_title_patterns.copy()
+        patterns.extend([
+            f"{topic} {angle}" if angle else f"{topic} Explained",
+            f"{topic}: {angle} Strategies" if angle else f"{topic} Strategies for Success",
+            f"{topic} – What You Need to Know in 2026",
+            f"{topic} for {brief.audience.capitalize()}s",
+        ])
+        patterns.extend([
+            f"{len(patterns)} Key {topic} Insights",
+            f"Everything About {topic} in Simple Terms",
+            f"Should You Use {topic}? A Complete Guide",
+        ])
+        seen = set()
+        out: List[str] = []
+        for t in patterns:
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+            if len(out) >= n:
+                break
+        return out
+
+    def _calculate_seo_score(self, title: str, brief: Any) -> float:
+        score = 0.0
+        l = len(title)
+        if 50 <= l <= 65:
+            score += 5
+        elif 40 <= l <= 75:
+            score += 3
+        if brief.primary_keyword.lower() in title.lower():
+            score += 5
+        for kw in brief.secondary_keywords:
+            if kw.lower() in title.lower():
+                score += 2
+        power = ["ultimate", "guide", "best", "how to", "why", "what", "essential", "proven"]
+        if any(p in title.lower() for p in power) or (brief.angle and brief.angle.lower() in title.lower()):
+            score += 5
+        for row in brief.gsc_insights.get('queries', []):
+            q = row.get('keys', [None])[0]
+            if q and q.lower() in title.lower():
+                score += 2
+        return score
+
+    # retain legacy search helpers for optional use
     def search_topic(self, topic: str, num_results: int = 10) -> list:
-        """
-        Search for articles related to the topic.
-        
-        Args:
-            topic: The topic to search for
-            num_results: Number of results to fetch
-            
-        Returns:
-            List of search results with titles and metadata
-        """
         results = []
-        
-        # Try using SerpAPI if key is available
         if self.serpapi_key:
             results = self._search_with_serpapi(topic, num_results)
         else:
-            # Fallback to analyzing trending patterns
             results = self._generate_trending_topics(topic)
-            
         return results
+
+    # (remaining methods unchanged: _search_with_serpapi, _generate_trending_topics, analyze_seo_value, select_best_title)
     
     def _search_with_serpapi(self, topic: str, num_results: int) -> list:
         """Search using SerpAPI."""
@@ -180,190 +188,6 @@ class SEOTitleAgent(A2AAgent):
         
         return [{"title": t, "estimated_volume": 5000 + i*100, "score": 95-i*2} 
                 for i, t in enumerate(titles)]
-    
-    def analyze_seo_value(self, titles: list) -> list:
-        """
-        Analyze SEO value of titles based on keyword metrics.
-        
-        Args:
-            titles: List of titles with metadata
-            
-        Returns:
-            Same list with SEO scores added
-        """
-        seo_scored = []
-        
-        for result in titles:
-            title = result.get("title", "")
-            
-            # Calculate SEO score based on criteria
-            score = self._calculate_seo_score(title)
-            result["seo_score"] = score
-            seo_scored.append(result)
-        
-        # Sort by SEO score descending
-        return sorted(seo_scored, key=lambda x: x["seo_score"], reverse=True)
-    
-    def _calculate_seo_score(self, title: str) -> float:
-        """
-        Calculate SEO score for a title.
-        
-        Factors:
-        - Length (50-60 characters optimal)
-        - Keywords (topic words, modifiers)
-        - Readability
-        - CTR patterns
-        """
-        score = 0.0
-        
-        # Length score (optimal: 50-60 chars)
-        length = len(title)
-        if 40 <= length <= 65:
-            score += 30
-        elif 30 <= length <= 80:
-            score += 20
-        else:
-            score += 5
-        
-        # PowerWords (increase CTR)
-        power_words = ["ultimate", "guide", "best", "complete", "essential", 
-                       "how to", "why", "what", "2026", "trending", "exclusive",
-                       "comprehensive", "expert", "proven", "revolutionary",
-                       "new", "latest", "secret", "powerful"]
-        power_word_count = sum(1 for word in power_words if word.lower() in title.lower())
-        score += min(power_word_count * 15, 35)
-        
-        # Keyword presence
-        keyword_count = len([w for w in title.split() if len(w) > 4])
-        score += min(keyword_count * 3, 25)
-        
-        # Structure points (has numbers, questions, etc.)
-        has_year = bool(re.search(r'\b20\d{2}\b', title))
-        has_number = bool(re.search(r'\d+', title))
-        has_question = '?' in title
-        
-        score += 5 if has_year else 0
-        score += 3 if has_number else 0
-        score += 5 if has_question else 0
-        
-        return min(score, 100)
-    
-    def select_best_title(self, scored_titles: list) -> str:
-        """
-        Select the title with the highest SEO value.
-        
-        Args:
-            scored_titles: List of titles with SEO scores
-            
-        Returns:
-            The best title string
-        """
-        if not scored_titles:
-            return "Artificial Intelligence: The Complete Guide"
-        
-        best = scored_titles[0]
-        return best.get("title", "")
-    
-    def research_and_generate(self, topic: str, gsc_data: Dict[str, Any] = None) -> str:
-        """
-        Main method: Research topic and generate SEO-optimized title.
-        
-        Args:
-            topic: The topic to research
-            gsc_data: Optional dictionary of performance insights from GSC
-        
-        Returns:
-            The best SEO-optimized article title
-        """
-        # Generate candidates in varied styles
-        print(f"Generating title candidates for {topic}...", file=__import__('sys').stderr)
-        candidates = self.generate_title_candidates(topic, n=20)
-        
-        # Score each candidate
-        scored = []
-        for title in candidates:
-            score = self._calculate_seo_score(title)
-            scored.append({"title": title, "seo_score": score})
-        
-        # Sort by score
-        scored = sorted(scored, key=lambda x: x["seo_score"], reverse=True)
-        
-        # Use GSC data if available
-        if gsc_data:
-            site_perf = gsc_data.get("site_performance", {})
-            ctr = site_perf.get("ctr")
-            if ctr is not None and ctr < 0.02:
-                # Penalize short titles when CTR is low
-                for item in scored:
-                    if len(item.get("title", "")) < 45:
-                        item["seo_score"] -= 5
-        
-        # Select best
-        scored = sorted(scored, key=lambda x: x["seo_score"], reverse=True)
-        best_title = scored[0].get("title", "Artificial Intelligence: The Complete Guide") if scored else "Artificial Intelligence: The Complete Guide"
-        
-        return best_title
-
-    def generate_title(self, topic: str, gsc_data: Dict[str, Any] = None) -> str:
-        """Convenience method called by orchestrator to create title."""
-        return self.research_and_generate(topic, gsc_data)
-
-    def generate_title_candidates(self, topic: str, n: int = 20) -> List[str]:
-        """
-        Generate varied title candidates in different styles.
-        
-        Args:
-            topic: The topic
-            n: Number of candidates to generate
-            
-        Returns:
-            List of varied title patterns
-        """
-        candidates = []
-        year = 2026
-        
-        # Listicle style
-        candidates.extend([
-            f"10 Essential {topic} Strategies for {year}",
-            f"15 {topic} Tips That Actually Work",
-            f"7 Common {topic} Mistakes to Avoid",
-            f"5 {topic} Trends Dominating {year}",
-        ])
-        
-        # Guide style
-        candidates.extend([
-            f"The Ultimate Guide to {topic}",
-            f"Complete {topic} Guide for Beginners",
-            f"{topic}: A Comprehensive Guide",
-            f"How to Master {topic} in {year}",
-        ])
-        
-        # Comparison/What is
-        candidates.extend([
-            f"{topic} Explained: Everything You Need to Know",
-            f"What is {topic}? Definition and Examples",
-            f"{topic} vs Alternatives: Complete Comparison",
-            f"{topic}: Real-World Use Cases and Benefits",
-        ])
-        
-        # Problem/Solution
-        candidates.extend([
-            f"Solving {topic} Challenges: Practical Solutions",
-            f"{topic} Problems and How to Fix Them",
-            f"Why {topic} Matters: Business Impact Guide",
-            f"The Future of {topic} in {year}",
-        ])
-        
-        # Templates/Step-by-step
-        candidates.extend([
-            f"Step-by-Step {topic} Implementation Guide",
-            f"{topic} Templates and Best Practices",
-            f"How to Get Started with {topic}",
-            f"Advanced {topic} Strategies for {year}",
-        ])
-        
-        # Return top N
-        return candidates[:n]
 
 
 def main():

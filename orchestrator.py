@@ -22,7 +22,9 @@ from wordpress_agent import WordPressArticleAgent
 from proofreader_agent import ProofreaderAgent
 from wordpress_publisher_agent import WordPressPublisherAgent
 from gsc_performance_agent import GSCPerformanceAgent
-from wp_content_index import WPContentIndex
+from seo_brief import build_brief
+from wp_index import load_or_build
+from similarity import outline_similarity
 
 
 class WriterAgentOrchestrator:
@@ -65,61 +67,25 @@ class WriterAgentOrchestrator:
         
         # Step 0: Load WordPress content index
         print("[Orchestrator] Step 0: Loading WordPress content index...", file=sys.stderr)
-        wp_index = WPContentIndex()
-        wp_posts = wp_index.load_or_build()
+        wp_idx = load_or_build()
+        wp_posts = wp_idx.index if hasattr(wp_idx, 'index') else list(wp_idx)
         print(f"[Orchestrator] Loaded {len(wp_posts)} posts from WordPress", file=sys.stderr)
         
-        # Step 1: Retrieve GSC performance insights
-        print("[Orchestrator] Step 1: Fetching GSC performance data...", file=sys.stderr)
-        gsc_data = {}
-        try:
-            msg = A2AMessage(
-                sender="orchestrator",
-                receiver="gsc_performance_agent",
-                message_type=MessageType.REQUEST,
-                payload={"request_type": "analyze_site"}
-            )
-            resp = self.broker.send_message(msg)
-            if resp and resp.message_type == MessageType.RESPONSE:
-                gsc_data = resp.payload.get("gsc_data", {})
-                print(f"[Orchestrator] GSC data retrieved", file=sys.stderr)
-        except Exception as e:
-            print(f"[Orchestrator] Failed to get GSC data: {e}", file=sys.stderr)
+        # Step 1: Build SEO brief (includes GSC and WP context)
+        print("[Orchestrator] Step 1: Building SEO brief (GSC + WP context)...", file=sys.stderr)
+        brief = build_brief(topic)
+        gsc_data = brief.gsc_insights if hasattr(brief, 'gsc_insights') else {}
+        if brief.dedupe_warnings:
+            print(f"[Orchestrator] Dedupe warnings found in brief: {brief.dedupe_warnings}", file=sys.stderr)
 
-        # Step 2: Generate and filter SEO-optimized title
-        print("[Orchestrator] Step 2: Generating title candidates...", file=sys.stderr)
-        seo_agent = self.seo_agent
-        
-        best_title = None
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            candidates = seo_agent.generate_title_candidates(topic, n=20)
-            
-            # Filter out duplicates
-            valid_candidates = []
-            for candidate in candidates:
-                dup_check = wp_index.find_duplicate_title(candidate, threshold=0.85)
-                if not dup_check["is_duplicate"]:
-                    valid_candidates.append(candidate)
-                else:
-                    matches = dup_check.get("matches", [])
-                    print(f"[Orchestrator] Title rejected (duplicate): '{candidate}'", file=sys.stderr)
-                    for match in matches[:1]:
-                        print(f"  - Similar to: {match['title']} ({match['similarity']})", file=sys.stderr)
-            
-            if valid_candidates:
-                # Score the valid candidates
-                scored = []
-                for title in valid_candidates:
-                    score = seo_agent._calculate_seo_score(title)
-                    scored.append({"title": title, "score": score})
-                
-                scored = sorted(scored, key=lambda x: x["score"], reverse=True)
-                best_title = scored[0]["title"]
-                print(f"[Orchestrator] Selected title: {best_title} (attempt {attempt+1})", file=sys.stderr)
-                break
-            elif attempt < max_attempts - 1:
-                print(f"[Orchestrator] All candidates were duplicates, regenerating... (attempt {attempt+1}/{max_attempts})", file=sys.stderr)
+        # Step 2: Generate SEO-optimized title using the brief
+        print("[Orchestrator] Step 2: Generating SEO-optimized title from brief...", file=sys.stderr)
+        try:
+            best_title = self.seo_agent.research_and_generate(brief)
+            print(f"[Orchestrator] Selected title: {best_title}", file=sys.stderr)
+        except Exception as e:
+            print(f"[Orchestrator] Title generation failed: {e}", file=sys.stderr)
+            best_title = f"Comprehensive Guide to {topic} in 2026"
         
         if not best_title:
             best_title = f"Comprehensive Guide to {topic} in 2026"
@@ -132,7 +98,7 @@ class WriterAgentOrchestrator:
         # Step 3: Request article generation via A2A Protocol
         print("[Orchestrator] Step 3: Requesting article generation via A2A Protocol...", file=sys.stderr)
         
-        # Create A2A message
+        # Create A2A message (include brief and WP index)
         message = A2AMessage(
             sender="seo_title_agent",
             receiver="wordpress_writer_agent",
@@ -140,10 +106,11 @@ class WriterAgentOrchestrator:
             payload={
                 "title": best_title,
                 "topic": topic,
+                "brief": brief,
                 "request_type": "generate_article",
                 "seo_optimized": True,
                 "gsc_data": gsc_data,
-                "wp_index": wp_posts
+                "wp_index": wp_idx
             }
         )
         
@@ -174,24 +141,20 @@ class WriterAgentOrchestrator:
         print("[Orchestrator] Step 5b: Filtering outline against WordPress...", file=sys.stderr)
         max_outline_attempts = 3
         for outline_attempt in range(max_outline_attempts):
-            dup_outline_check = wp_index.find_duplicate_outline(outline, threshold=0.7)
-            if not dup_outline_check["is_duplicate"]:
-                print(f"[Orchestrator] Outline approved (attempt {outline_attempt+1})", file=sys.stderr)
+            # compute max similarity of outline vs existing posts
+            max_sim = 0.0
+            for post in wp_posts:
+                sim = outline_similarity(outline, post.get("headings", []))
+                if sim > max_sim:
+                    max_sim = sim
+
+            if max_sim < 0.7:
+                print(f"[Orchestrator] Outline approved (max similarity {max_sim:.2f})", file=sys.stderr)
                 break
             else:
-                matches = dup_outline_check.get("matches", [])
-                matched_count = 0
-                if matches:
-                    matched_count = matches[0].get("shared_sections", 0)
-                print(f"[Orchestrator] Outline rejected (duplicate): {matched_count}/{len(outline)} headings match existing content", file=sys.stderr)
-                for match in matches[:1]:
-                    print(f"  - Article: {match['title']} ({match['similarity']})", file=sys.stderr)
-                
+                print(f"[Orchestrator] Outline rejected (too similar: {max_sim:.2f}), regenerating...", file=sys.stderr)
                 if outline_attempt < max_outline_attempts - 1:
-                    # Regenerate with different style_seed
                     style_seed = outline_attempt + 1
-                    print(f"[Orchestrator] Regenerating outline with style_seed={style_seed}... (attempt {outline_attempt+2}/{max_outline_attempts})", file=sys.stderr)
-                    
                     regen_msg = A2AMessage(
                         sender="orchestrator",
                         receiver="wordpress_writer_agent",
@@ -202,16 +165,15 @@ class WriterAgentOrchestrator:
                             "request_type": "generate_article",
                             "seo_optimized": True,
                             "gsc_data": gsc_data,
-                            "wp_index": wp_posts,
+                            "wp_index": wp_idx,
                             "style_seed": style_seed
                         }
                     )
-                    
                     regen_response = self.broker.send_message(regen_msg)
                     if regen_response.message_type == MessageType.RESPONSE:
                         article_content = regen_response.payload.get("content", article_content)
                         outline = regen_response.payload.get("outline", outline)
-                        print(f"[Orchestrator] Regenerated article with new outline", file=sys.stderr)
+                        print(f"[Orchestrator] Regenerated article with new outline (style_seed={style_seed})", file=sys.stderr)
                     else:
                         print(f"[Orchestrator] Regeneration failed, keeping previous outline", file=sys.stderr)
         

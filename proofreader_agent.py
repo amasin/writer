@@ -6,6 +6,8 @@ Uses A2A protocol to review articles, score them, and request improvements.
 
 import re
 from typing import Dict, Any, Tuple, Optional, List
+from wp_index import load_or_build
+from similarity import title_similarity, outline_similarity
 from datetime import datetime
 from a2a_protocol import A2AAgent, A2AMessage, MessageType, AgentType, A2AMessageBroker
 
@@ -140,35 +142,37 @@ class ProofreaderAgent(A2AAgent):
             if site_perf.get("ctr", 1) < 0.02:
                 suggestions.append("GSC data indicates low CTR site-wide; review title/intro and meta description.")
 
-        # check against WordPress index for duplicates
-        if wp_index_pages:
-            try:
-                from wp_content_index import WPContentIndex
-                idx = WPContentIndex()
-                idx.build_index(wp_index_pages)
+        # check against WordPress index for duplicates (use live index if not supplied)
+        try:
+            posts = []
+            if wp_index_pages:
+                # caller provided a pre-built list (compatibility)
+                posts = wp_index_pages
+            else:
+                idx = load_or_build()
+                posts = idx.index
 
-                # title similarity
-                if title:
-                    dup = idx.find_duplicate_title(title)
-                    if dup.get("is_duplicate"):
-                        matches = dup.get("matches", [])
-                        if matches:
-                            suggestions.append(
-                                f"Title is very similar to existing post '{matches[0]['title']}' (score {matches[0]['similarity']:.2f}). Consider a unique angle."
-                            )
+            # title similarity
+            if title:
+                for post in posts:
+                    if title_similarity(title, post.get("title", "")) >= 0.85:
+                        suggestions.append(
+                            f"Title is very similar to existing post '{post.get('title')}' (possible duplicate). Consider a unique angle."
+                        )
+                        break
 
-                # outline similarity
-                if outline:
-                    dup_o = idx.find_duplicate_outline(outline)
-                    if dup_o.get("is_duplicate"):
-                        matches = dup_o.get("matches", [])
-                        if matches:
-                            suggestions.append(
-                                f"Outline matches existing post '{matches[0]['title']}' ({dup_o.get('matched_headings',0)} headings similar). Diversify sections."
-                            )
-            except Exception:
-                # if WPContentIndex isn't available or fails, ignore
-                pass
+            # outline similarity
+            if outline:
+                for post in posts:
+                    sim = outline_similarity(outline, post.get("headings", []))
+                    if sim >= 0.75:
+                        suggestions.append(
+                            f"Outline closely matches existing post '{post.get('title')}' (similarity={sim:.2f}). Diversify sections."
+                        )
+                        break
+        except Exception:
+            # if live index fails, continue without duplicate checks
+            pass
 
         # Ensure score is within 0-10 range
         final_score = min(score, 10.0)
