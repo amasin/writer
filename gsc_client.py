@@ -25,11 +25,68 @@ except ImportError:
 
 class GSCClient:
     def __init__(self):
+        # if dependencies missing just raise
         if not service_account or not build:
             raise ImportError("google-api-python-client not installed")
         scopes = ["https://www.googleapis.com/auth/webmasters.readonly"]
+        # if an API key is provided, we can't authenticate with Search Console,
+        # so log a warning and fall back to the dummy client instead
+        if cfg.gsc_api_key:
+            logger.warning("GSC_API_KEY provided but Search Console requires OAuth2; using dummy client")
+            class Dummy:
+                def get_queries_for_topic_seed(self, seeds, days=90):
+                    return []
+                def get_low_ctr_opportunities(self, *args, **kwargs):
+                    return []
+                def get_query_gaps_for_page(self, *args, **kwargs):
+                    return []
+
+            self.service = None
+            self._dummy = Dummy()
+            self.cache_path = cfg.cache_dir / 'gsc_cache.json'
+            self.ttl = cfg.cache_ttl_seconds
+            return
+        # try OAuth client secrets flow if provided
+        oauth_path = cfg.google_oauth_client_secrets
+        if oauth_path and Path(oauth_path).exists():
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from google.oauth2.credentials import Credentials as OAuthCredentials
+            token_path = cfg.cache_dir / 'gsc_oauth_token.json'
+            creds = None
+            if token_path.exists():
+                try:
+                    creds = OAuthCredentials.from_authorized_user_file(str(token_path), scopes)
+                except Exception:
+                    creds = None
+            if not creds or not creds.valid:
+                flow = InstalledAppFlow.from_client_secrets_file(oauth_path, scopes)
+                creds = flow.run_local_server(port=0)
+                with open(token_path, 'w', encoding='utf-8') as f:
+                    f.write(creds.to_json())
+            self.service = build('searchconsole', 'v1', credentials=creds)
+            self.cache_path = cfg.cache_dir / 'gsc_cache.json'
+            self.ttl = cfg.cache_ttl_seconds
+            return
+        creds_path = cfg.google_application_credentials
+        # handle missing credential file gracefully (demo/test mode)
+        if not creds_path or not Path(creds_path).exists():
+            # create dummy methods and return early
+            class Dummy:
+                def get_queries_for_topic_seed(self, seeds, days=90):
+                    return []
+                def get_low_ctr_opportunities(self, *args, **kwargs):
+                    return []
+                def get_query_gaps_for_page(self, *args, **kwargs):
+                    return []
+
+            self.service = None
+            self._dummy = Dummy()
+            self.cache_path = cfg.cache_dir / 'gsc_cache.json'
+            self.ttl = cfg.cache_ttl_seconds
+            return
+
         creds = service_account.Credentials.from_service_account_file(
-            cfg.google_application_credentials, scopes=scopes
+            creds_path, scopes=scopes
         )
         self.service = build('searchconsole', 'v1', credentials=creds)
         self.cache_path = cfg.cache_dir / 'gsc_cache.json'
@@ -67,11 +124,16 @@ class GSCClient:
         }
         if filters:
             body['dimensionFilterGroups'] = [{'filters': filters}]
+        if hasattr(self, '_dummy'):
+            return []
         resp = self.service.searchanalytics().query(siteUrl=cfg.gsc_site_url, body=body).execute()
         return resp.get('rows', [])
 
     # high-level helpers
     def get_queries_for_topic_seed(self, seeds: List[str], days: int = 90) -> List[Dict[str, Any]]:
+        # if we created a dummy client, delegate
+        if hasattr(self, '_dummy'):
+            return self._dummy.get_queries_for_topic_seed(seeds, days=days)
         # fetch queries and filter by seed terms
         rows = self.query_performance(self._date_days_ago(days), self._date_days_ago(1), ['query'])
         return [r for r in rows if any(seed.lower() in r['keys'][0].lower() for seed in seeds)]
